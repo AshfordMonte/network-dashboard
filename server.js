@@ -1,23 +1,62 @@
-// server.js (CommonJS)
+/**
+ * server.js
+ *
+ * This is the backend for the dashboard.
+ *
+ * Responsibilities:
+ * - Serve the static frontend (public/index.html, styles.css, app.js)
+ * - Provide an internal API endpoint: GET /api/status-summary
+ * - Call Sonar's GraphQL API (server-side only — keeps token private)
+ * - Cache results so multiple dashboard viewers don't spam Sonar API
+ * - Print usable LAN URLs on startup
+ */
+
+// Built-in Node modules
 const path = require("path");
+const os = require("os");
+
+// Third-party modules
 const express = require("express");
 const dotenv = require("dotenv");
-const os = require("os");
+
+// Local modules
 const { sonarGraphqlRequest } = require("./sonarClient");
 
+// Load environment variables from .env into process.env
 dotenv.config();
 
+// Create the Express app
 const app = express();
+
+// Port can be set in .env. Defaults to 3000.
 const PORT = Number(process.env.PORT || 3000);
+
+// Bind to all interfaces so other machines on the LAN can reach it.
+// NOTE: 0.0.0.0 is *not* an address you browse to — it means "listen everywhere".
 const HOST = "0.0.0.0";
 
-// Serve static frontend
+/**
+ * Serve the frontend files out of ./public
+ */
 app.use(express.static(path.join(__dirname, "public")));
 
-// Health check
+/**
+ * Simple health endpoint.
+ * Useful for quickly testing "is the server alive?"
+ */
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// ---- Sonar Query (Customer Equipment Status Totals) ----
+/**
+ * Sonar GraphQL query used to count customer equipment statuses.
+ *
+ * This query returns total account count and several filtered totals:
+ * - good / warning / down are based on inventory_items.icmp_device_status
+ * - uninventoried_only tracks customer-owned gear that isn't ICMP polled
+ *
+ * Variables:
+ * - $companyId (Int64Bit)
+ * - $accountStatusID (Int64Bit)
+ */
 const FULL_LIST_QUERY = `
 query full_list($companyId: Int64Bit, $accountStatusID: Int64Bit) {
   total: accounts(company_id: $companyId, account_status_id: $accountStatusID) {
@@ -64,38 +103,67 @@ query full_list($companyId: Int64Bit, $accountStatusID: Int64Bit) {
 }
 `;
 
-// Small cache to avoid hammering Sonar
-const CACHE_MS = 15_000;
+/**
+ * Cache settings.
+ *
+ * If multiple people load the dashboard, they'd otherwise all cause Sonar calls.
+ * With caching, the server calls Sonar once per CACHE_MS window, and everyone
+ * gets the same response until the cache expires.
+ */
+const CACHE_MS = 60_000; // 60 seconds
 let cache = { ts: 0, payload: null };
 
+/**
+ * Helper: read an environment variable and safely convert it to a number.
+ * Returns null if missing or invalid.
+ */
 function getEnvInt(name) {
   const v = process.env[name];
   if (v === undefined || v === "") return null;
+
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Helper: safely pull the count from Sonar's result format.
+ * Sonar returns counts under: { page_info: { total_count } }
+ */
 function pickCount(node) {
   return node?.page_info?.total_count ?? 0;
 }
 
+/**
+ * Calls Sonar GraphQL and returns the customer equipment summary in our
+ * dashboard-friendly shape.
+ *
+ * Requires in .env:
+ * - SONAR_ENDPOINT
+ * - SONAR_TOKEN
+ *
+ * Optional in .env:
+ * - SONAR_COMPANY_ID
+ * - SONAR_ACCOUNT_STATUS_ID
+ */
 async function getCustomerEquipmentSummary() {
   const endpoint = process.env.SONAR_ENDPOINT;
   const token = process.env.SONAR_TOKEN;
 
+  // Fail fast if the Sonar connection info isn't configured
   if (!endpoint || !token) {
     throw new Error("Missing SONAR_ENDPOINT or SONAR_TOKEN in .env");
   }
 
-  // Optional filters you can set in .env
-  const companyId = getEnvInt("SONAR_COMPANY_ID"); // optional
-  const accountStatusID = getEnvInt("SONAR_ACCOUNT_STATUS_ID"); // optional
+  // Optional filters you can set in .env (null means "no filter")
+  const companyId = getEnvInt("SONAR_COMPANY_ID");
+  const accountStatusID = getEnvInt("SONAR_ACCOUNT_STATUS_ID");
 
   const variables = {
     companyId: companyId ?? null,
     accountStatusID: accountStatusID ?? null,
   };
 
+  // Run GraphQL request against Sonar
   const data = await sonarGraphqlRequest({
     endpoint,
     token,
@@ -103,36 +171,56 @@ async function getCustomerEquipmentSummary() {
     variables,
   });
 
-  // Map Sonar response -> dashboard shape
+  // Convert Sonar response -> dashboard counts
   const total = pickCount(data.total);
   const good = pickCount(data.good);
   const warning = pickCount(data.warning);
   const down = pickCount(data.down);
+
+  // This represents customer-owned gear that isn't being ICMP polled
   const uninventoried = pickCount(data.uninventoried_only);
 
   return { customerEquipment: { good, warning, uninventoried, down, total } };
 }
 
+/**
+ * GET /api/status-summary
+ *
+ * This endpoint is what the frontend calls on a timer.
+ * It returns a consistent JSON structure:
+ * {
+ *   ok: true/false,
+ *   source: "sonar" | "cache" | "error",
+ *   summary: { ...counts... }
+ * }
+ */
 app.get("/api/status-summary", async (req, res) => {
   try {
-    // cache hit
     const now = Date.now();
+
+    // If cache is still fresh, return it immediately (no Sonar call)
     if (cache.payload && now - cache.ts < CACHE_MS) {
       return res.json({ ok: true, source: "cache", summary: cache.payload });
     }
 
+    // Otherwise, fetch fresh data from Sonar
     const customer = await getCustomerEquipmentSummary();
 
-    // You can add infra later; for now send zeros so UI is stable
+    // Infrastructure isn't ready yet — keep stable placeholders for the UI
     const payload = {
       infrastructureEquipment: { good: 0, warning: 0, bad: 0, down: 0 },
       customerEquipment: customer.customerEquipment,
     };
 
+    // Save to cache for the next requests
     cache = { ts: now, payload };
+
+    // Send response to the frontend
     res.json({ ok: true, source: "sonar", summary: payload });
   } catch (err) {
+    // Don't crash the server — return a structured error response instead
     console.error("Status summary error:", err);
+
     res.status(200).json({
       ok: false,
       source: "error",
@@ -145,13 +233,18 @@ app.get("/api/status-summary", async (req, res) => {
   }
 });
 
+/**
+ * Returns a list of external IPv4 addresses on this machine.
+ *
+ * This is used only for printing the correct LAN URL(s) at startup.
+ */
 function getLocalIPs() {
   const nets = os.networkInterfaces();
   const results = [];
 
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
-      // Skip over internal (i.e. 127.0.0.1) and non-IPv4
+      // Skip internal adapters (127.0.0.1) and anything not IPv4
       if (net.family === "IPv4" && !net.internal) {
         results.push(net.address);
       }
@@ -161,16 +254,24 @@ function getLocalIPs() {
   return results;
 }
 
+/**
+ * Start the web server.
+ *
+ * Note: We bind to 0.0.0.0 so the service is reachable on the LAN.
+ * The printed URLs below are the ones you actually browse to.
+ */
 app.listen(PORT, HOST, () => {
+  console.log(`Dashboard server started.`);
+  console.log(`Local: http://localhost:${PORT}`);
+
   const ips = getLocalIPs();
 
   if (ips.length === 0) {
     console.log("No external IPv4 addresses detected.");
   } else {
     console.log("LAN access:");
-    ips.forEach(ip => {
+    ips.forEach((ip) => {
       console.log(`  → http://${ip}:${PORT}`);
     });
   }
 });
-
