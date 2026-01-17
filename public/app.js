@@ -6,7 +6,7 @@
  * - Refreshes on an interval
  */
 
-const REFRESH_MS = 10_000;
+const REFRESH_MS = 60_000;
 
 const el = (id) => document.getElementById(id);
 
@@ -20,9 +20,10 @@ const ui = {
   cust: {
     good: el("cust-good"),
     warning: el("cust-warning"),
-    bad: el("cust-bad"),
+    uninventoried: el("cust-uninventoried"),
     down: el("cust-down"),
   },
+
   apiDot: el("api-dot"),
   apiStatus: el("api-status"),
   lastUpdated: el("last-updated"),
@@ -54,7 +55,7 @@ function render(summary) {
 
   ui.cust.good.textContent = fmt(summary?.customerEquipment?.good);
   ui.cust.warning.textContent = fmt(summary?.customerEquipment?.warning);
-  ui.cust.bad.textContent = fmt(summary?.customerEquipment?.bad);
+  ui.cust.uninventoried.textContent = fmt(summary?.customerEquipment?.uninventoried);
   ui.cust.down.textContent = fmt(summary?.customerEquipment?.down);
 }
 
@@ -70,23 +71,29 @@ function getMockSummary() {
 }
 
 async function fetchSummary() {
-  // When your backend exists, this should work:
-  // GET http://<server-ip>:3000/api/status-summary
   const res = await fetch("/api/status-summary", { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  return await res.json(); // { ok, source, summary, ... }
 }
 
 async function refresh() {
   try {
-    const summary = await fetchSummary();
-    render(summary);
-    setApiState("ok", "API: Connected");
+    const payload = await fetchSummary();
+    render(payload.summary);
+
+    if (payload.ok) {
+      const label =
+        payload.source === "cache"
+          ? "API: Connected (cached)"
+          : "API: Connected";
+      setApiState("ok", label);
+    } else {
+      setApiState("bad", `API: Error (${payload.error || "unknown"})`);
+    }
+
     setLastUpdated(new Date());
   } catch (err) {
-    // Fallback while backend isn't wired up yet
-    render(getMockSummary());
-    setApiState("bad", "API: Using mock data");
+    setApiState("bad", "API: Request failed");
     setLastUpdated(new Date());
   }
 }
