@@ -298,6 +298,18 @@ body{
   background: rgba(255,255,255,0.02);
 }
 
+.pc-table tbody tr{
+  transition: background 120ms ease;
+}
+
+.pc-table tbody tr:hover{
+  background: rgba(255,255,255,0.045);
+}
+.pc-table tbody tr:focus-within{
+  background: rgba(255,255,255,0.06);
+}
+
+
 .pc-link{
   color: #2aa8ff;
   text-decoration: none;
