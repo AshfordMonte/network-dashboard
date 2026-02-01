@@ -62,7 +62,7 @@ network-dashboard/
 ├─ server.js                   # Express application entry point
 ├─ sonarClient.js              # Sonar GraphQL client wrapper
 └─ README.md
-
+```
 
 ## Setup
 Clone the repository into a folder via Bash terminal
