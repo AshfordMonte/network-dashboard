@@ -8,7 +8,7 @@ const { clearCustomerCaches } = require("./api");
 
 const router = express.Router();
 
-// List all suppressed accounts
+// List all suppressed accounts.
 router.get("/", (req, res) => {
   res.json({
     ok: true,
@@ -16,7 +16,7 @@ router.get("/", (req, res) => {
   });
 });
 
-// Suppress account
+// Suppress account by ID and clear cached data.
 router.post("/accounts/:id", (req, res) => {
   suppressAccount(req.params.id);
   clearCustomerCaches();
@@ -24,7 +24,7 @@ router.post("/accounts/:id", (req, res) => {
 });
 
 
-// Unsuppress account
+// Unsuppress account by ID and clear cached data.
 router.delete("/accounts/:id", (req, res) => {
   unsuppressAccount(req.params.id);
   clearCustomerCaches();
