@@ -1,10 +1,12 @@
 const fs = require("fs");
 const path = require("path");
 
+// Where we store the suppression list on disk.
 const DATA_PATH = path.resolve(__dirname, "../../data/suppressions.json");
 
 let suppressedAccounts = new Set();
 
+// Load suppression data from disk into memory.
 function load() {
   if (!fs.existsSync(DATA_PATH)) {
     fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
@@ -15,6 +17,7 @@ function load() {
   suppressedAccounts = new Set((raw.accounts || []).map(String));
 }
 
+// Persist the in-memory set back to disk.
 function save() {
   fs.writeFileSync(
     DATA_PATH,
@@ -22,21 +25,24 @@ function save() {
   );
 }
 
+// Return the live suppression set.
 function getSuppressedAccounts() {
   return suppressedAccounts;
 }
 
+// Add an account ID to suppressions.
 function suppressAccount(id) {
   suppressedAccounts.add(String(id));
   save();
 }
 
+// Remove an account ID from suppressions.
 function unsuppressAccount(id) {
   suppressedAccounts.delete(String(id));
   save();
 }
 
-// load once at startup
+// Load once at startup.
 load();
 
 module.exports = {
